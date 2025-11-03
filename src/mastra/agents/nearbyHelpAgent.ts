@@ -182,7 +182,7 @@ Politely acknowledge that and suggest checking nearby roads or landmarks.
 
 Your mission: make local discovery effortless, intelligent, and natural for the user.
 `,
-  model: 'google/gemini-2.5-pro',
+  model: 'google/gemini-2.5-flash',
   tools: { geoapifyPlacesTool },
   memory: new Memory({
     storage: new LibSQLStore({
