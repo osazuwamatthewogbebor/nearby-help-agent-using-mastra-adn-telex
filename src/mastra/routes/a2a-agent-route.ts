@@ -1,6 +1,5 @@
 import { registerApiRoute } from '@mastra/core/server';
 import { randomUUID } from 'crypto';
-import axios from 'axios';
 
 export const a2aAgentRoute = registerApiRoute('/a2a/agent/:agentId', {
   method: 'POST',
@@ -9,10 +8,11 @@ export const a2aAgentRoute = registerApiRoute('/a2a/agent/:agentId', {
       const mastra = c.get('mastra');
       const agentId = c.req.param('agentId');
 
+      // Parse JSON-RPC 2.0 request
       const body = await c.req.json();
-      const { jsonrpc, id: requestId, params } = body;
+      const { jsonrpc, id: requestId, method, params } = body;
 
-      // Basic JSON-RPC validation
+      // Validate JSON-RPC 2.0 format
       if (jsonrpc !== '2.0' || !requestId) {
         return c.json({
           jsonrpc: '2.0',
@@ -36,10 +36,9 @@ export const a2aAgentRoute = registerApiRoute('/a2a/agent/:agentId', {
         }, 404);
       }
 
+      // Extract messages from params
       const { message, messages, contextId, taskId, metadata } = params || {};
-      const responseUrl = metadata?.response_url;
 
-      // Build message list
       let messagesList = [];
       if (message) {
         messagesList = [message];
@@ -47,7 +46,7 @@ export const a2aAgentRoute = registerApiRoute('/a2a/agent/:agentId', {
         messagesList = messages;
       }
 
-      // Convert to Mastra format
+      // Convert A2A messages to Mastra format
       const mastraMessages = messagesList.map((msg) => ({
         role: msg.role,
         content: msg.parts?.map((part) => {
@@ -57,11 +56,50 @@ export const a2aAgentRoute = registerApiRoute('/a2a/agent/:agentId', {
         }).join('\n') || ''
       }));
 
-      // ✅ Respond immediately (no timeout)
-      c.executionCtx.waitUntil(
-        processAgentAsync(agent, agentId, mastraMessages, responseUrl, contextId, taskId)
-      );
+      // Execute agent
+      const response = await agent.generate(mastraMessages);
+      const agentText = response.text || '';
 
+      // Build artifacts array
+      const artifacts = [
+        {
+          artifactId: randomUUID(),
+          name: `${agentId}Response`,
+          parts: [{ kind: 'text', text: agentText }]
+        }
+      ];
+
+      // Add tool results as artifacts
+      if (response.toolResults && response.toolResults.length > 0) {
+        artifacts.push({
+          artifactId: randomUUID(),
+          name: 'ToolResults',
+          parts: response.toolResults.map((result) => ({
+            kind: 'data',
+            data: result
+          }))
+        });
+      }
+
+      // Build conversation history
+      const history = [
+        ...messagesList.map((msg) => ({
+          kind: 'message',
+          role: msg.role,
+          parts: msg.parts,
+          messageId: msg.messageId || randomUUID(),
+          taskId: msg.taskId || taskId || randomUUID(),
+        })),
+        {
+          kind: 'message',
+          role: 'agent',
+          parts: [{ kind: 'text', text: agentText }],
+          messageId: randomUUID(),
+          taskId: taskId || randomUUID(),
+        }
+      ];
+
+      // Return A2A-compliant response
       return c.json({
         jsonrpc: '2.0',
         id: requestId,
@@ -69,14 +107,18 @@ export const a2aAgentRoute = registerApiRoute('/a2a/agent/:agentId', {
           id: taskId || randomUUID(),
           contextId: contextId || randomUUID(),
           status: {
-            state: 'processing',
+            state: 'completed',
             timestamp: new Date().toISOString(),
             message: {
-              role: 'system',
-              parts: [{ kind: 'text', text: 'Agent is processing your request...' }],
+              messageId: randomUUID(),
+              role: 'agent',
+              parts: [{ kind: 'text', text: agentText }],
               kind: 'message'
             }
-          }
+          },
+          artifacts,
+          history,
+          kind: 'task'
         }
       });
 
@@ -93,27 +135,3 @@ export const a2aAgentRoute = registerApiRoute('/a2a/agent/:agentId', {
     }
   }
 });
-
-async function processAgentAsync(agent, agentId, mastraMessages, responseUrl, contextId, taskId) {
-  try {
-    const response = await agent.generate(mastraMessages);
-    const agentText = response.text || '';
-
-    // If Slack response_url exists, send update back
-    if (responseUrl) {
-      await axios.post(responseUrl, {
-        response_type: 'in_channel',
-        text: agentText
-      });
-    }
-
-    console.log(`[${agentId}] Completed async processing`);
-  } catch (err) {
-    if (responseUrl) {
-      await axios.post(responseUrl, {
-        text: `Error while processing: ${err.message}`
-      });
-    }
-    console.error(`[${agentId}] Async processing failed:`, err);
-  }
-}
