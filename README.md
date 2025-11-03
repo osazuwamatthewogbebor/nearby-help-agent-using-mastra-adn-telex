@@ -81,7 +81,7 @@ Below is a ready-to-use Telex workflow configuration for your **Nearby Help Agen
       "position": [800, -100],
       "type": "a2a/mastra-a2a-node",
       "typeVersion": 1,
-      "url": "https://telex-mastra.mastra.cloud/a2a/agent/nearbyHelpAgent"
+      "url": "https://enough-slow-london.mastra.cloud/a2a/agent/nearbyHelpAgent"
     }
   ],
   "settings": {
